@@ -3,6 +3,7 @@ Activity Management functions for Garmin Connect MCP Server
 """
 import json
 import datetime
+import requests
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
@@ -42,6 +43,52 @@ def _update_activity_summary(activity_id: int, fields: Dict[str, Any]) -> Any:
     """
     return _put_activity_update(activity_id, {"summaryDTO": fields})
 
+def _fix_garmin_temp_units(weather: Dict[str, Any]) -> Dict[str, Any]:
+    """Garmin occasionally returns temperature_celsius already in Fahrenheit
+    (e.g. 77 instead of 25). Values above 50 are almost certainly mislabeled."""
+    for key in ("temperature_celsius", "apparent_temperature_celsius"):
+        val = weather.get(key)
+        if isinstance(val, (int, float)) and val > 50:
+            weather[key] = round((val - 32) * 5 / 9, 1)
+            weather["_unit_corrected"] = True
+    return weather
+
+
+def _get_open_meteo_weather(lat: float, lon: float, start_time_local: str) -> Dict[str, Any]:
+    """Historical hourly weather for exact GPS coordinates via Open-Meteo's
+    ERA5 reanalysis archive. No API key required; unlike station-based
+    sources, this covers remote/microclimate areas (e.g. Canary Islands
+    trails) at the activity's own coordinates rather than the nearest
+    weather station."""
+    date_str = start_time_local.split("T")[0].split(" ")[0]
+    hour_str = start_time_local.replace(" ", "T")[:13]  # "YYYY-MM-DDTHH"
+
+    resp = requests.get(
+        "https://archive-api.open-meteo.com/v1/archive",
+        params={
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": date_str,
+            "end_date": date_str,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,apparent_temperature",
+            "timezone": "auto",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    idx = times.index(hour_str) if hour_str in times else 0
+
+    return {
+        "source": "open-meteo-era5",
+        "temperature_celsius": hourly.get("temperature_2m", [None])[idx],
+        "apparent_temperature_celsius": hourly.get("apparent_temperature", [None])[idx],
+        "humidity_percent": hourly.get("relative_humidity_2m", [None])[idx],
+        "wind_speed_kmh": hourly.get("wind_speed_10m", [None])[idx],
+    }
 
 def register_tools(app):
     """Register all activity management tools with the MCP server app"""
