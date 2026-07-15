@@ -298,6 +298,10 @@ def register_tools(app):
                 "lap_count": metadata.get('lapCount'),
                 "has_splits": metadata.get('hasSplits'),
                 "device_manufacturer": metadata.get('manufacturer'),
+
+                # Location
+                "start_latitude": summary.get('startLatitude'),
+                "start_longitude": summary.get('startLongitude'),
             }
 
             # Remove None values
