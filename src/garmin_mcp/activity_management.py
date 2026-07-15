@@ -733,6 +733,59 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving activity weather data: {str(e)}"
+            @app.tool()
+    async def get_activity_weather_enriched(activity_id: Union[int, str]) -> str:
+        """Get weather for an activity, cross-checked against exact GPS coordinates.
+
+        Garmin's native weather (get_activity_weather) comes from the nearest
+        forecast station and occasionally mislabels Fahrenheit as Celsius. This
+        tool corrects that and adds a second reading from Open-Meteo's ERA5
+        historical archive, computed for the activity's own start coordinates —
+        useful in areas with sparse station coverage (e.g. Canary Islands trails,
+        mountain routes) where the nearest station may be far away or at a very
+        different altitude.
+
+        Args:
+            activity_id: ID of the activity to retrieve weather data for
+        """
+        try:
+            activity_id = int(activity_id)
+
+            activity_raw = garmin_client.get_activity(activity_id)
+            summary = (activity_raw or {}).get('summaryDTO', {})
+            lat = summary.get('startLatitude')
+            lon = summary.get('startLongitude')
+            start_time = summary.get('startTimeLocal')
+
+            result: Dict[str, Any] = {"activity_id": activity_id}
+
+            try:
+                garmin_weather = garmin_client.get_activity_weather(activity_id)
+                if garmin_weather:
+                    curated_garmin = {
+                        "temperature_celsius": garmin_weather.get('temp'),
+                        "apparent_temperature_celsius": garmin_weather.get('apparentTemp'),
+                        "humidity_percent": garmin_weather.get('relativeHumidity'),
+                        "wind_speed_mps": garmin_weather.get('windSpeed'),
+                        "location": garmin_weather.get('issueLocation'),
+                    }
+                    result["garmin"] = _fix_garmin_temp_units(curated_garmin)
+            except Exception as e:
+                result["garmin_error"] = str(e)
+
+            if lat is not None and lon is not None and start_time:
+                try:
+                    result["open_meteo"] = _get_open_meteo_weather(lat, lon, start_time)
+                except Exception as e:
+                    result["open_meteo_error"] = str(e)
+            else:
+                result["open_meteo_error"] = "No GPS coordinates or start time available for this activity"
+
+            result["coordinates"] = {"lat": lat, "lon": lon}
+
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return f"Error retrieving enriched weather data: {str(e)}"
 
     @app.tool()
     async def get_activity_hr_in_timezones(activity_id: Union[int, str]) -> str:
